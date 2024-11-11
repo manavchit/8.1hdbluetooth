@@ -1,73 +1,92 @@
-from bluepy import btle  # Import the Bluetooth Low Energy (BLE) library for device communication
-import time  # Import time for potential delays
-from gpiozero import PWMLED  # Import PWMLED for LED brightness control
-import RPi.GPIO  # Import RPi.GPIO to configure the Raspberry Pi pin mode
+from bluepy import btle       # Import the BluePy library for Bluetooth Low Energy (BLE) communication
+import time                   # Import time module for delays
+from gpiozero import Buzzer   # Import GPIOZero library to control the buzzer
+import RPi.GPIO               # Import RPi.GPIO for handling GPIO modes and pin configurations on Raspberry Pi
 
-# Set up GPIO mode for the Raspberry Pi
+# Set GPIO mode to use physical pin numbering for easy identification
 RPi.GPIO.setmode(RPi.GPIO.BOARD)
 
-# Initialize LED at GPIO pin 18 for PWM control (adjusts brightness)
-blue_led = PWMLED(18)
+# Initialize a Buzzer on GPIO pin 18 (use the physical pin number).
+# You can change the pin number if needed based on your setup.
+buzzer = Buzzer(18)
 
-def map_lux_to_analog_value(lux, max_lux=1500):
+def map_distance_to_buzz(distance, max_distance=60):
     """
-    Maps a light level in lux to an analog value suitable for PWM control.
-    lux: The measured lux value (from sensor)
-    max_lux: The maximum lux expected (default 1500)
-    Returns: Analog value between 0 and 255 based on lux level.
+    Maps a given distance to a buzzing pattern to indicate proximity.
+    
+    Args:
+    - distance (int): The distance to an object (in cm) received from the BLE device.
+    - max_distance (int): The distance threshold in cm. If the object is closer than this distance,
+                          the buzzer will emit short beeps.
+
+    Behavior:
+    - If the distance is below the threshold, the buzzer emits short beeps
+      to alert the user about close proximity to an object (e.g., a wall).
+    - If the distance is greater than or equal to the threshold, the buzzer remains off.
     """
-    analog_value = int((lux / max_lux) * 255)  # Map lux (0 to max_lux) to (0 to 255)
-    
-    # Ensure the analog_value is clamped between 0 and 255
-    analog_value = max(0, min(255, analog_value))
-    
-    return analog_value
+    if distance < max_distance:
+        buzzer.on()             # Activate the buzzer to emit a beep
+        time.sleep(0.1)         # Hold the buzzer on for a short 0.1 second beep
+        buzzer.off()            # Deactivate the buzzer to stop the beep
+        time.sleep(0.1)         # Wait for 0.1 seconds before the next beep
+    else:
+        buzzer.off()            # Ensure the buzzer is off if distance exceeds max_distance
 
 def connect_and_read_ble(device_mac, characteristic_uuid):
     """
-    Connects to a BLE device and reads light sensor data, adjusting LED brightness.
-    device_mac: MAC address of the BLE device
-    characteristic_uuid: UUID of the characteristic to read data from
+    Connect to a BLE device, read distance data continuously, and trigger alerts based on proximity.
+
+    Args:
+    - device_mac (str): MAC address of the BLE device to connect to.
+    - characteristic_uuid (str): UUID of the characteristic providing distance data.
+
+    Behavior:
+    - Establishes a connection to the BLE device using its MAC address.
+    - Continuously reads the specified characteristic, which provides the distance value in cm.
+    - Converts the received byte data into an integer distance and triggers the `map_distance_to_buzz`
+      function to control the buzzer based on proximity.
     """
     try:
-        # Attempt to connect to the BLE device
+        # Attempt connection to the BLE device with provided MAC address
         print(f"Connecting to {device_mac}...")
-        device = btle.Peripheral(device_mac, btle.ADDR_TYPE_PUBLIC)
+        device = btle.Peripheral(device_mac, btle.ADDR_TYPE_PUBLIC)  # Establish BLE connection
 
-        # Continuously read light sensor values and map them to LED brightness
+        # Indicate that the characteristic read process is starting
+        print(f"Reading characteristic {characteristic_uuid}...")
+
+        # Start an infinite loop to continuously read and process distance data
         while True:
-            print(f"Reading characteristic {characteristic_uuid}...")
-
-            # Fetch characteristic by UUID and read its current value
+            # Fetch the BLE characteristic specified by the UUID
             characteristic = device.getCharacteristics(uuid=characteristic_uuid)[0]
-            value = characteristic.read()  # Read the value as bytes
-            number = int.from_bytes(value, byteorder='big')  # Convert byte value to an integer
             
-            print(f"Value: {number}")  # Output the raw lux reading
+            # Read the raw data from the characteristic (in bytes)
+            value = characteristic.read()
+            
+            # Convert the byte data to an integer representing the distance in centimeters
+            number = int.from_bytes(value, byteorder='big')  
+            print(f"Distance from wall: {number} cm")  # Output the distance reading for reference
 
-            # Convert the lux value to an analog value for LED control
-            analog_value = map_lux_to_analog_value(number, 150)
-            print(f"Analog Value: {analog_value}")
-
-            # Set the LED brightness (1 - value to invert the scale)
-            blue_led.value = 1 - (analog_value / 255)
+            # Map the distance to a buzzing pattern, alerting the user if within max_distance
+            map_distance_to_buzz(number, max_distance=60)
 
     except Exception as e:
-        # Handle connection or read errors
+        # Handle any exceptions during connection or reading
         print(f"Failed to connect or read from {device_mac}: {str(e)}")
+        
+        # Ensure that the device is disconnected in case of an error
         device.disconnect()
-        print("Disconnected")
+        print("Disconnected")  # Log disconnection status
 
     except KeyboardInterrupt:
-        # Handle keyboard interrupt (Ctrl+C) to safely disconnect
+        # If the user interrupts (e.g., pressing Ctrl+C), gracefully disconnect the device
         print("Disconnecting...")
-        device.disconnect()
+        device.disconnect()     # Ensure clean disconnection from BLE device
         print("Disconnected")
 
 if __name__ == "__main__":
-    # Define BLE device MAC address and characteristic UUID for light sensor
-    device_mac_address = "D3:72:9F:4C:11:67"  
-    characteristic_uuid = "2A6E"  
+    # Define the BLE device's MAC address and characteristic UUID to identify the source of distance data
+    device_mac_address = "D3:72:9F:4C:11:67"  # Replace with actual MAC address of your BLE device
+    characteristic_uuid = "2A6E"              # Replace with characteristic UUID for distance data
 
-    # Start the BLE connection and LED brightness control
+    # Start the BLE connection and begin reading distance data from the device
     connect_and_read_ble(device_mac_address, characteristic_uuid)
